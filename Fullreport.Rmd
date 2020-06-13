@@ -1,0 +1,269 @@
+---
+title: "Indonesian COVID-19 Visualizations"
+author: "Wisly Juganda"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+require(rgdal)
+require(leaflet)
+require(geojsonio)
+require(readr)
+require(data.table)
+require(dplyr)
+require(RColorBrewer)
+require(shiny)
+require(plotly)
+require(lubridate)
+require(ggplot2)
+```
+
+## Introduction
+
+In light of the global onset of COVID-19, I was interested in studying trends in the spread of the 
+disease. I also noticed that although there are many studies done on global trends of the pandemic, 
+and country-wide studies for China and the US, there were none for my home country, Indonesia. This 
+is what prompted my research into COVID-19 trends in Indonesia, which will be further explored below. 
+In particular, I looked into the growth rate of the disease, the effects of government intervention, 
+the provincial distribution of the disease and comparisons with other countries. 
+
+The datasets used are the COVID-19 case datasets for Indonesia as of May 14th, 2020, starting from 
+the date the first case was confirmed, March 2nd, 2020. Two datasets were used for this: one time 
+series data showing country-wide growth of the virus over time, and another showing the number of 
+cases in each province of Indonesia. Datasets for the time series for COVID-19 in other countries 
+were also used. It is important to note that the number of cases largely depend on testing. That is, 
+a large increase in the number of cases does not necessarily indicate an actual increase, but could 
+simply be an increase in the amount of people tested. Indonesia is also undertesting and reports 
+smaller numbers of cases than the actual numbers.
+
+The interpretation of data is supplemented by literary sources on government interventions, 
+demographic information, and economic information. These are found through credible local news 
+sources and government research publications. 
+
+## 1. Disease Growth rate
+
+Firstly, I explored the growth rate of the disease throughout Indonesia using a time series. This was
+done to find out how fast the disease was spreading and whether government intervention (implemented 
+at certain dates) effectively contained the virus. 
+
+```{r cars, echo=TRUE}
+#Read Time-series data
+time <- read.csv("Timeseries.csv")
+
+#Convert Date column into date format
+time$Date <- ymd(time$Date)
+
+#Plot growth rate
+plot_ly(time,
+        x=~Date,
+        y=~New_case_per_day,
+        name="New Confirmed cases",
+        type="scatter",
+        mode="lines+markers")%>%
+  add_trace(y=~Death_cases_perDay, name="New Death cases", mode="lines+markers")%>%
+  layout(title="Daily Growth rate of COVID-19 in Indonesia",
+         xaxis=list(title="Date"),
+         yaxis=list(title="Number of New Cases"))
+```
+
+As seen from the graph, the growth of new cases has an overall increasing trend, although the exact number of new cases varies highly from day to day. This could be due to the increased testing with the government’s increasing attention to the virus, or simply due to the increased spread of the virus. The death rate, on the other hand, seems to be decreasing. Possible due to increased preparedness of hospitals around the country in handling cases.
+
+## 2. Status of cumulative cases
+
+Next, I analyzed the proportion of recoveries and deaths in relation to the cumulative amount of cases. Using an area plot, we can see the proportion of the infected population that has recovered, died, or
+are still currently under treatment.
+
+```{r pressure, echo=TRUE}
+plot_ly(time,
+        x=~Date,
+        y=~Patient_under_treatment,
+        name="Cases under treatment",
+        type="scatter",
+        mode="none",
+        stackgroup='one',
+        fillcolor="steel blue",
+        hoverinfo="text",
+        text=~paste(Date, " Percentage: ", as.character(round(((Patient_under_treatment/Cumulative_cases)*100), digits=2)),'%'))%>%
+  add_trace(y = ~Recovered_cases, name = 'Recovered cases', fillcolor = 'chartreuse',hoverinfo="text",
+            text=~paste(Date, " Percentage: ", as.character(round(((Recovered_cases/Cumulative_cases)*100), digits=2)),'%'))%>%
+  add_trace(y=~Total_death, name= 'Death cases', fillcolor='orange', hoverinfo="text",
+            text=~paste(Date, " Percentage: ", as.character(round(((Total_death/Cumulative_cases)*100), digits=2)),'%'))%>%
+  layout(title="Cumulative cases of COVID-19 in Indonesia",
+         xaxis=list(title="Date"),
+         yaxis=list(title="Number of Cases"))
+```
+
+According to this analysis, the death rate (indicated as the orange area), started off very high at 
+around 9.5% but has since  decreased to 6.52% due to the increase in equipment to deal with the virus. Recovery rate (the green area on the curve) has also increased up to 21.98%. The percentage of cases 
+under treatment (blue area of the curve) continuously increases and is currently at 71.5%, it also 
+seems to be increasing sharply. All of the regions combined shows the total number of cumulative 
+cases from the start of the outbreak, and it seems to be increasing sharply as well.
+This is in line with the increasing number of new cases each day, as found in the previous visualization.
+
+## 3. Geographic distribution of cases
+
+To analyze how the disease has spread throughout the country, I created a choropleth showing the total number of confirmed cases in each province.
+
+```{r, echo=TRUE}
+#Read Provincial COVID-19 distribution data
+prov <- read.csv("CasebyProvince.csv")
+
+#Read provincial map of Indonesia
+province <- geojson_read("IDN_adm_1_province.json", what='sp')
+
+#Prepare data frames for merging the two loaded datasets
+slotNames(province)
+
+province@data$rn <- row.names(province)
+
+temp.province<-data.table(province@data)
+
+#Fix names of provinces according to those in the map data
+prov %>%
+  mutate(NAME_1=as.character(Province_name)) -> prov
+prov%>%
+  mutate(NAME_1=ifelse(NAME_1=="Daerah Istimewa Yogyakarta", 'Yogyakarta', NAME_1),
+         NAME_1=ifelse(NAME_1=="DKI Jakarta", 'Jakarta Raya', NAME_1),
+         NAME_1=ifelse(NAME_1=="Papua Barat", 'Irian Jaya Barat', NAME_1),
+         NAME_1=ifelse(NAME_1=="Kepulauan Bangka Belitung", 'Bangka-Belitung', NAME_1)) -> prov
+prov <- prov %>% filter(NAME_1 != 'Indonesia'&NAME_1 !='Kepulauan Riau')
+
+#Merge two datasets
+out.prov<-merge(temp.province, prov, by="NAME_1", all.x=TRUE)
+
+out.prov<-data.table(out.prov)
+
+setkey(out.prov, rn)
+province@data <- out.prov[row.names(province)]
+
+#Define coloring function and color palette
+pal <- colorNumeric("YlOrRd", domain = NULL)
+
+#Plot confirmed cases choropleth
+leaflet(data = province)%>%
+  addProviderTiles("CartoDB.Positron")%>%
+  addPolygons(fillColor = ~pal(log(Confirmed_cases)),
+              fillOpacity = 0.8,
+              color = "black",
+              weight = 1,
+              popup=~paste(NAME_1, ", No. of Confirmed cases:", as.character(Confirmed_cases)))%>%
+  addMarkers(lng=106.816666,
+             lat=-6.200000,
+             popup=paste("Jakarta", ", No. of Confirmed cases: 5688"))%>%
+  addLegend("bottomleft",
+            colors=brewer.pal(5,"YlOrRd"),
+            labels=c("low","","","","high"),
+            title="Number of Confirmed cases")
+```
+
+It seems that most cases are concentrated in Jakarta and Java Island (as indicated by the red color), 
+which makes sense considering that Jakarta is the political and economic center of the country, 
+meaning many flights land in Jakarta. It also has the smallest area compared to any other province, 
+leading to a rapid spread of the virus in the province. However, there are a lot less cases in islands outside of Java. This may be due to the islands being separated by sea, limiting disease 
+transmission. On the other hand, the numbers in other islands may be underreported as infrastructure 
+is not evenly distributed among all islands. In fact, the most developed areas are in Java Island.
+
+## 4. Fatality rates by province
+
+I also looked into the case fatality rate of each province in Indonesia using a choropleth. Case 
+fatality rate is the percentage of deaths over the total number of cases in that province.
+
+```{r, echo=TRUE}
+leaflet(data = province)%>%
+  addProviderTiles("CartoDB.Positron")%>%
+  addPolygons(fillColor = ~pal((Death_cases/Confirmed_cases)*100),
+              fillOpacity = 0.8,
+              color = "black",
+              weight = 1,
+              popup=~paste(NAME_1, ", Case Fatality Rate:", as.character(round((Death_cases/Confirmed_cases)*100, digits=2)), '%'))%>%
+  addMarkers(lng=106.816666,
+             lat=-6.200000,
+             popup=paste("Jakarta", ", Case Fatality Rate: 7.95%"))%>%
+  addLegend("bottomleft",
+            colors=brewer.pal(5,"YlOrRd"),
+            labels=c("low","","","","high"),
+            title="Case Fatality rate")
+```
+
+It seems that the highest case fatality rate is in North Sumatra (Sumatera Utara), with a rate of 
+11.88%. This is surprising considering that there are not a lot of cases in North Sumatra compared to 
+provinces in Java Island according to the previous choropleth. This may be due to the lack of 
+resources in that North Sumatra, as generally infrastructure access is heavily concentrated in Java 
+Island. The geographical divide may serve to reduce the rate of disease transmission, but it also 
+limits access to healthcare facilities. 
+
+## 5. Comparison between countries and world average
+
+An important question to ask is how does the situation in Indonesia compare to that of other 
+countries? To answer this, I compared the case fatality rate over time. I compared Indonesia’s case 
+fatality rate over time with the world average, Asia’s Average, the US, and Italy. The dataset chosen 
+only records case fatality rate starting on March 16th, 2020, which is when the number of cases 
+reached 100 in Indonesia.
+
+```{r, echo=TRUE}
+#Read and fix structure of columns in the global death rate dataset
+w_death <- read.csv("deathrate.csv")
+w_death$Entity <- as.character(w_death$Entity)
+w_death$Date <- mdy(w_death$Date)
+
+#Filter to regions and dates of interest
+w_death <- w_death %>% filter(Entity %in% c("World", "United States", "Indonesia", "Asia", "Italy")&
+                                Date>=ymd("2020-03-16")&Date<=ymd("2020-05-14"))
+
+#Plot death rate data of different regions
+ggplot(w_death)+
+  geom_line(aes(x=Date, y=Case.fatality.rate.of.COVID.19......Only.observations.with.â..100.cases....., color=Entity))+
+  ggtitle("Case Fatality rate in different countries as of May 14th 2020")+
+  ylab("Case Fatality rate (%)") 
+```
+
+It seems that Indonesia is doing better than Italy, but has only recently had a lower case fatality 
+rate than the world average. It is also doing relatively worse than the US and the Asian average. 
+Most countries in Asia handled the pandemic promptly due to being in closer proximity with China. 
+However, Indonesia did not declare a state of emergency until March 20th. This is possibly caused by 
+the lack of government acknowledgement, hence the spike in mortality rate in mid-March. This 
+relatively high mortality rate is also surprising considering that Indonesia’s population distribution is skewed towards younger ages compared to Italy or the US. The younger population have a 
+significantly lower mortality rate compared to older populations.
+
+## Conclusion
+
+From these visualizations, we can conclude that Indonesia should be on lockdown. This is especially 
+worrying as the government has not mandated any orders to quarantine. On the other hand, this is 
+understandable considering the number of lower-class workers that rely on physical labor to gain 
+income. Either way, the spike in mortality rate earlier on and sharp increase in cases should 
+indicate that earlier government intervention should have been implemented. Indonesia’s geography as 
+an archipelago has also affected the spread of the virus, but has also made it difficult to access 
+healthcare. 
+
+A primary limitation of this research is the lack of sources on Indonesian COVID-19 cases. Indonesia 
+itself is not a very big country so there are not a lot of data sources. Added to that, the amount of 
+testing is severely lacking. It is most likely that the actual number of COVID-19 cases is much higher than what is reported. Although the trends in the actual numbers are probably not far off from what
+I have found This is a limitation of most disease research, since the amount of data is highly
+dependent on testing. Indonesia also has large disparities in infrastructure between regions, making 
+it difficult to test and report results of less developed regions. 
+
+Some further research could be done to see the change in provincial distribution of the virus over 
+time, however, due to the limited data, I was unable to find provincial data of earlier dates. More 
+comparisons between countries can also be made on the growth rate of the virus, but this is difficult 
+considering the difference in population of each country, and the difference in time since the first 
+outbreak in each country. Furthermore, the topic of this research is on Indonesia and focusing on 
+comparisons with other countries would detract from the scope of the research. As for further 
+applications, I am interested in seeing whether I can create a web platform with daily updates using 
+the visualizations I have made. Similar online dashboards have been made for other countries, so I 
+believe it would be useful for Indonesians to be informed through this channel.
+
+### Data Sources:
+https://data.humdata.org/dataset/indonesia-covid-19-cases-recoveries-and-deaths-per-province
+https://github.com/pararawendy/border-desa-indonesia-geojson
+https://ourworldindata.org/covid-deaths
+
+### Literary Sources:
+Indonesia Age structure. (n.d.). Retrieved from 
+https://www.indexmundi.com/indonesia/age_structure.html
+
+Jakarta Post. (n.d.). Indonesia's latest official COVID-19 figures. Retrieved from 
+https://www.thejakartapost.com/news/2020/03/23/indonesias-latest-covid-19-figures.html
+
+Policy Responses to COVID19. (n.d.). Retrieved from 
+https://www.imf.org/en/Topics/imf-and-covid19/Policy-Responses-to-COVID-19
